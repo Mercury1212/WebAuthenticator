@@ -1,0 +1,643 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Web Authenticator — Argon2id encrypted</title>
+
+<!-- Use a bundled Argon2 so wasm loads reliably -->
+<script src="https://cdn.jsdelivr.net/npm/argon2-browser/dist/argon2-bundled.min.js"></script>
+
+<style>
+  :root{
+    --bg:#0f1724; --card:#0b1220; --muted:#9aa4b2; --accent:#2dd4bf;
+    --danger:#ff6b6b;
+    --glass: rgba(255,255,255,0.03);
+  }
+  html,body{height:100%;margin:0;font-family:Inter,Segoe UI,Roboto,"Helvetica Neue",Arial;}
+  body{
+    background: linear-gradient(180deg,#021027 0%, #07132a 100%);
+    color:#e6eef6; display:flex; align-items:center; justify-content:center;
+    padding:28px;
+  }
+  .wrapper{width:980px; max-width:96vw;}
+  header{display:flex;align-items:center;justify-content:space-between;margin-bottom:18px;}
+  h1{font-size:20px;margin:0}
+  .controls{display:flex;gap:8px}
+  button{background:var(--glass);border:1px solid rgba(255,255,255,0.06);color:inherit;padding:8px 12px;border-radius:8px;cursor:pointer}
+  button.primary{background:linear-gradient(90deg,#06313a,#044b56);box-shadow:0 4px 12px rgba(2,6,23,0.6);border:none}
+  button.danger{background:linear-gradient(90deg,#441111,#661111);border:none}
+  .card{background:linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01)); padding:16px;border-radius:12px;box-shadow:0 6px 20px rgba(2,6,23,0.6); border:1px solid rgba(255,255,255,0.03)}
+  .grid{display:grid;grid-template-columns: 1fr 340px; gap:14px; align-items:start}
+  .list{min-height:320px}
+  .entry{display:flex;align-items:center;justify-content:space-between;padding:12px;border-radius:10px;margin-bottom:8px;background:rgba(255,255,255,0.01);border:1px solid rgba(255,255,255,0.02)}
+  .entry .meta{display:flex;gap:12px;align-items:center}
+  .badge{background:rgba(255,255,255,0.03);padding:6px 8px;border-radius:8px;font-weight:600}
+  .totp{font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, "Roboto Mono", monospace; font-size:20px; letter-spacing:2px}
+  .small{font-size:12px;color:var(--muted)}
+  .center{display:flex;align-items:center;justify-content:center}
+  footer{margin-top:12px;color:var(--muted);font-size:13px}
+
+  /* modal */
+  .modal-backdrop{position:fixed;inset:0;background:rgba(2,6,23,0.6);display:none;align-items:center;justify-content:center;z-index:40}
+  .modal{background:linear-gradient(180deg, #061226, #041521);padding:18px;border-radius:12px;max-width:520px;width:96%;border:1px solid rgba(255,255,255,0.04)}
+  .modal h2{margin:0 0 10px 0}
+  label{display:block;font-size:13px;color:var(--muted);margin:6px 0 4px}
+  input[type=text], input[type=password], textarea, select{width:100%;padding:8px;border-radius:8px;border:1px solid rgba(255,255,255,0.04);background:transparent;color:inherit}
+  .row{display:flex;gap:8px}
+  .row > *{flex:1}
+  .actions{display:flex;gap:8px;justify-content:flex-end;margin-top:12px}
+  .help{font-size:12px;color:var(--muted);margin-top:6px}
+
+  .meter{height:8px;background:rgba(255,255,255,0.03);border-radius:8px;overflow:hidden}
+  .meter > i{display:block;height:100%}
+
+  .tiny{font-size:11px;color:var(--muted)}
+  .muted{color:var(--muted)}
+  @media (max-width:880px){
+    .grid{grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+<div class="wrapper">
+  <header>
+    <h1>Web Authenticator — Argon2id encrypted</h1>
+    <div class="controls">
+      <button id="btnCreate" class="primary">Create new DB</button>
+      <button id="btnLoad">Load DB</button>
+      <button id="btnSave" disabled>Save DB</button>
+      <button id="btnLock" disabled>Lock</button>
+    </div>
+  </header>
+
+  <div class="grid">
+    <div class="card list" id="listContainer">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+        <div>
+          <div class="small">Entries</div>
+          <div id="status" class="tiny muted">Locked — no database open</div>
+        </div>
+        <div>
+          <button id="btnAdd" disabled>Add entry</button>
+        </div>
+      </div>
+
+      <div id="entries"></div>
+      <div class="help">Add a new entry and paste the secret (Base32). Codes are computed locally and not sent anywhere.</div>
+    </div>
+
+    <div class="card">
+      <div style="display:flex;align-items:center;justify-content:space-between">
+        <div>
+          <div class="small">Master Status</div>
+          <div id="masterInfo" class="badge">No DB</div>
+        </div>
+        <div class="center">
+          <div style="text-align:right">
+            <div class="small">Next refresh</div>
+            <div id="countdown" class="badge">--</div>
+          </div>
+        </div>
+      </div>
+
+      <hr style="border:0;border-top:1px solid rgba(255,255,255,0.03);margin:12px 0">
+
+      <div>
+        <div class="small">Selected entry preview</div>
+        <div id="preview" style="padding:12px;border-radius:8px;background:rgba(255,255,255,0.01);margin-top:8px">
+          <div class="muted">No entry selected</div>
+        </div>
+      </div>
+
+      <footer>
+        <div>Storage: local file only. Argon2id parameters are stored inside the encrypted file for correct re-derivation.</div>
+      </footer>
+    </div>
+  </div>
+</div>
+
+<!-- Modals -->
+<div class="modal-backdrop" id="modalBackdrop">
+  <div class="modal" role="dialog" aria-modal="true" id="modal">
+    <!-- dynamic content -->
+  </div>
+</div>
+
+<input type="file" id="fileInput" accept=".auth.json" style="display:none" />
+
+<script>
+/*
+  Full Web Authenticator
+  - Argon2id via argon2-browser bundled
+  - AES-GCM encryption for DB
+  - TOTP using WebCrypto HMAC-SHA1
+  - Save/Load via file download/upload
+*/
+
+/* ---------- Utilities ---------- */
+const u8ToB64 = u8 => btoa(String.fromCharCode(...u8));
+const b64ToU8 = b64 => Uint8Array.from(atob(b64), c=>c.charCodeAt(0));
+const strToU8 = s => new TextEncoder().encode(s);
+const u8ToStr = u8 => new TextDecoder().decode(u8);
+
+function randBytes(n){ return crypto.getRandomValues(new Uint8Array(n)); }
+function nowUnix(){ return Math.floor(Date.now() / 1000); }
+
+/* Base32 decode (RFC4648, no padding required) */
+function base32Decode(s){
+  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+  s = s.replace(/=+$/,'').replace(/\s+/g,'').toUpperCase();
+  let bits = 0, value = 0;
+  const bytes = [];
+  for(let i=0;i<s.length;i++){
+    const idx = alphabet.indexOf(s[i]);
+    if(idx === -1) continue;
+    value = (value << 5) | idx;
+    bits += 5;
+    if(bits >= 8){
+      bits -= 8;
+      bytes.push((value >> bits) & 0xFF);
+    }
+  }
+  return new Uint8Array(bytes);
+}
+
+/* TOTP: HMAC-SHA1 counter -> code */
+async function hotp(secretBytes, counter, digits=6){
+  const counterBytes = new Uint8Array(8);
+  let c = BigInt(counter);
+  for(let i=7;i>=0;i--){ counterBytes[i] = Number(c & 0xFFn); c >>= 8n; }
+  const key = await crypto.subtle.importKey('raw', secretBytes, {name:'HMAC', hash:'SHA-1'}, false, ['sign']);
+  const sig = new Uint8Array(await crypto.subtle.sign('HMAC', key, counterBytes));
+  const offset = sig[sig.length - 1] & 0x0f;
+  const bin = ((sig[offset] & 0x7f) << 24) | (sig[offset+1] << 16) | (sig[offset+2] << 8) | (sig[offset+3]);
+  const code = (bin % (10 ** digits)).toString().padStart(digits, '0');
+  return code;
+}
+
+async function totpForSecret(base32Secret, period=30, digits=6){
+  const secretBytes = base32Decode(base32Secret);
+  const t = Math.floor(Date.now() / 1000 / period);
+  return hotp(secretBytes, BigInt(t), digits);
+}
+
+/* ---------- Argon2id + AES helpers ---------- */
+async function deriveKeyArgon2(password, saltBytes, params){
+  // argon2-browser hash expects strings for pass and salt; convert salt bytes to string
+  const passStr = password;
+  const saltStr = Array.from(saltBytes).map(b=>String.fromCharCode(b)).join('');
+  try{
+    const argObj = await argon2.hash({
+      pass: passStr,
+      salt: saltStr,
+      time: params.time || 3,
+      mem: params.mem || 65536,
+      parallelism: params.parallelism || 1,
+      hashLen: params.hashLen || 32,
+      type: argon2.ArgonType.Argon2id
+    });
+    // argObj.hash is Uint8Array
+    return crypto.subtle.importKey('raw', argObj.hash, 'AES-GCM', false, ['encrypt','decrypt']);
+  } catch(err){
+    console.error('Argon2 error', err);
+    throw err;
+  }
+}
+
+async function aesGcmEncrypt(key, plaintextBytes, iv){
+  return new Uint8Array(await crypto.subtle.encrypt({name:'AES-GCM', iv}, key, plaintextBytes));
+}
+async function aesGcmDecrypt(key, ciphertextBytes, iv){
+  return new Uint8Array(await crypto.subtle.decrypt({name:'AES-GCM', iv}, key, ciphertextBytes));
+}
+
+/* ---------- App state ---------- */
+let db = { entries: [] }; // decrypted db (plain object)
+let cryptoKey = null; // CryptoKey derived from Argon2
+let currentFileMeta = null; // for saving: object with salt, params, etc
+let totpInterval = null;
+let selectedId = null;
+
+/* ---------- DOM ---------- */
+const btnCreate = document.getElementById('btnCreate');
+const btnLoad = document.getElementById('btnLoad');
+const btnSave = document.getElementById('btnSave');
+const btnLock = document.getElementById('btnLock');
+const btnAdd = document.getElementById('btnAdd');
+const entriesEl = document.getElementById('entries');
+const statusEl = document.getElementById('status');
+const masterInfoEl = document.getElementById('masterInfo');
+const previewEl = document.getElementById('preview');
+const countdownEl = document.getElementById('countdown');
+const fileInput = document.getElementById('fileInput');
+const modalBackdrop = document.getElementById('modalBackdrop');
+const modalEl = document.getElementById('modal');
+
+/* ---------- UI helpers ---------- */
+function showModal(html){
+  modalEl.innerHTML = html;
+  modalBackdrop.style.display = 'flex';
+  const fi = modalEl.querySelector('input,textarea,select,button');
+  if(fi) fi.focus();
+}
+function closeModal(){ modalBackdrop.style.display = 'none'; modalEl.innerHTML = ''; }
+
+modalBackdrop.addEventListener('click', (e)=>{
+  // do not close on backdrop click to avoid accidental dismissal
+});
+
+/* close on Escape */
+window.addEventListener('keydown', (e)=>{
+  if(e.key === 'Escape') closeModal();
+});
+
+/* ---------- App functions ---------- */
+
+function setLockedUI(locked){
+  btnSave.disabled = locked;
+  btnAdd.disabled = locked;
+  btnLock.disabled = locked;
+  if(locked){
+    statusEl.textContent = 'Locked — no database open';
+    masterInfoEl.textContent = 'Locked';
+  } else {
+    statusEl.textContent = `Unlocked — ${db.entries.length} entries`;
+    masterInfoEl.textContent = `Unlocked — ${db.entries.length} entries`;
+  }
+  renderEntries();
+  renderPreview(null);
+}
+
+function renderEntries(){
+  entriesEl.innerHTML = '';
+  if(!db || !db.entries || db.entries.length === 0){
+    entriesEl.innerHTML = '<div class="muted tiny">No entries yet</div>';
+    return;
+  }
+  db.entries.forEach((e, idx)=>{
+    const div = document.createElement('div');
+    div.className = 'entry';
+    const meta = document.createElement('div');
+    meta.className = 'meta';
+    meta.innerHTML = `<div>
+      <div style="font-weight:700">${escapeHtml(e.issuer ? e.issuer : e.label)}</div>
+      <div class="small muted">${escapeHtml(e.label)}</div>
+    </div>`;
+    const right = document.createElement('div');
+    right.style.display='flex'; right.style.gap='10px'; right.style.alignItems='center';
+    const totpSpan = document.createElement('div');
+    totpSpan.className='totp';
+    totpSpan.textContent = '------';
+    totpSpan.id = 'totp-'+idx;
+    const ctr = document.createElement('div');
+    ctr.style.display='flex'; ctr.style.gap='6px';
+    const btnView = document.createElement('button'); btnView.textContent='View'; btnView.title='Select';
+    const btnEdit = document.createElement('button'); btnEdit.textContent='Edit';
+    const btnDel = document.createElement('button'); btnDel.textContent='Delete';
+    btnView.onclick = ()=>{ selectedId = idx; renderPreview(idx); };
+    btnEdit.onclick = ()=>{ openEditModal(idx); };
+    btnDel.onclick = ()=>{ if(confirm('Delete this entry?')){ db.entries.splice(idx,1); renderEntries(); setLockedUI(false); } };
+    ctr.appendChild(btnView); ctr.appendChild(btnEdit); ctr.appendChild(btnDel);
+    right.appendChild(totpSpan); right.appendChild(ctr);
+    div.appendChild(meta); div.appendChild(right);
+    entriesEl.appendChild(div);
+  });
+}
+
+function renderPreview(idx){
+  if(idx === null || idx === undefined){
+    previewEl.innerHTML = '<div class="muted">No entry selected</div>';
+    return;
+  }
+  const e = db.entries[idx];
+  if(!e) return;
+  previewEl.innerHTML = `
+    <div style="display:flex;align-items:center;justify-content:space-between">
+      <div>
+        <div style="font-weight:700">${escapeHtml(e.issuer || e.label)}</div>
+        <div class="small muted">${escapeHtml(e.label)}</div>
+      </div>
+      <div style="text-align:right">
+        <div class="totp" id="previewCode">------</div>
+        <div class="small muted">Digits: ${e.digits || 6} • Period: ${e.period || 30}s</div>
+      </div>
+    </div>
+    <div style="margin-top:8px" class="tiny muted">Secret (base32): <code style="background:rgba(255,255,255,0.02);padding:4px;border-radius:6px">${escapeHtml(e.secret)}</code></div>
+    <div style="margin-top:8px;display:flex;gap:8px">
+      <button id="copyCode">Copy code</button>
+      <button id="showQr">Show QR</button>
+    </div>
+  `;
+  document.getElementById('copyCode').onclick = async ()=>{
+    const code = await totpForSecret(e.secret, e.period, e.digits);
+    try{
+      await navigator.clipboard.writeText(code);
+      alert('Copied: '+code);
+    }catch(err){
+      alert('Copy failed — allow clipboard permissions or copy manually: ' + code);
+    }
+  };
+  document.getElementById('showQr').onclick = ()=>{ showQrModal(e); };
+}
+
+/* ---------- Add / Edit ---------- */
+function openAddModal(){
+  showModal(`
+    <h2>Create new entry</h2>
+    <label>Label (account)</label>
+    <input id="m_label" type="text" placeholder="email@example.com" />
+    <label>Issuer (provider)</label>
+    <input id="m_issuer" type="text" placeholder="GitHub, Google, ..."/>
+    <label>Secret (Base32)</label>
+    <input id="m_secret" type="text" placeholder="JBSWY3DPEHPK3PXP"/>
+    <div class="row" style="margin-top:6px">
+      <div>
+        <label>Digits</label>
+        <select id="m_digits"><option>6</option><option>8</option></select>
+      </div>
+      <div>
+        <label>Period (sec)</label>
+        <select id="m_period"><option>30</option><option>60</option></select>
+      </div>
+    </div>
+    <div class="actions">
+      <button id="m_cancel">Cancel</button>
+      <button id="m_save" class="primary">Save</button>
+    </div>
+  `);
+  modalEl.querySelector('#m_cancel').onclick = closeModal;
+  modalEl.querySelector('#m_save').onclick = ()=>{
+    const label = modalEl.querySelector('#m_label').value.trim();
+    const issuer = modalEl.querySelector('#m_issuer').value.trim();
+    const secret = modalEl.querySelector('#m_secret').value.trim().replace(/\s+/g,'').toUpperCase();
+    const digits = parseInt(modalEl.querySelector('#m_digits').value,10);
+    const period = parseInt(modalEl.querySelector('#m_period').value,10);
+    if(!label || !secret){ alert('Label and secret required'); return; }
+    db.entries.push({label, issuer, secret, digits, period});
+    closeModal();
+    setLockedUI(false);
+  };
+}
+
+function openEditModal(idx){
+  const e = db.entries[idx];
+  showModal(`
+    <h2>Edit entry</h2>
+    <label>Label (account)</label>
+    <input id="m_label" type="text" value="${escapeHtml(e.label)}" />
+    <label>Issuer (provider)</label>
+    <input id="m_issuer" type="text" value="${escapeHtml(e.issuer||'')}" />
+    <label>Secret (Base32)</label>
+    <input id="m_secret" type="text" value="${escapeHtml(e.secret)}"/>
+    <div class="row" style="margin-top:6px">
+      <div>
+        <label>Digits</label>
+        <select id="m_digits"><option${e.digits==6?' selected':''}>6</option><option${e.digits==8?' selected':''}>8</option></select>
+      </div>
+      <div>
+        <label>Period (sec)</label>
+        <select id="m_period"><option${e.period==30?' selected':''}>30</option><option${e.period==60?' selected':''}>60</option></select>
+      </div>
+    </div>
+    <div class="actions">
+      <button id="m_cancel">Cancel</button>
+      <button id="m_save" class="primary">Save</button>
+    </div>
+  `);
+  modalEl.querySelector('#m_cancel').onclick = closeModal;
+  modalEl.querySelector('#m_save').onclick = ()=>{
+    const label = modalEl.querySelector('#m_label').value.trim();
+    const issuer = modalEl.querySelector('#m_issuer').value.trim();
+    const secret = modalEl.querySelector('#m_secret').value.trim().replace(/\s+/g,'').toUpperCase();
+    const digits = parseInt(modalEl.querySelector('#m_digits').value,10);
+    const period = parseInt(modalEl.querySelector('#m_period').value,10);
+    if(!label || !secret){ alert('Label and secret required'); return; }
+    db.entries[idx] = {label, issuer, secret, digits, period};
+    closeModal();
+    setLockedUI(false);
+  };
+}
+
+/* QR modal (simple) */
+function showQrModal(entry){
+  const labelEsc = encodeURIComponent(entry.issuer ? `${entry.issuer}:${entry.label}` : entry.label);
+  const secretEnc = encodeURIComponent(entry.secret);
+  const url = `otpauth://totp/${labelEsc}?secret=${secretEnc}&issuer=${encodeURIComponent(entry.issuer||'')}&period=${entry.period||30}&digits=${entry.digits||6}`;
+  showModal(`
+    <h2>QR / otpauth</h2>
+    <div class="small muted">otpauth URL (scan with Authenticator apps)</div>
+    <textarea readonly style="height:80px;margin-top:8px">${url}</textarea>
+    <div class="help">You can paste this otpauth URL into another authenticator or generate a QR image externally.</div>
+    <div class="actions">
+      <button id="m_close">Close</button>
+    </div>
+  `);
+  modalEl.querySelector('#m_close').onclick = closeModal;
+}
+
+/* ---------- Create DB / Lock / Save / Load ---------- */
+
+btnCreate.addEventListener('click', async ()=>{
+  showModal(`
+    <h2>Create new database</h2>
+    <label>Master password</label>
+    <input id="p1" type="password" />
+    <label>Confirm password</label>
+    <input id="p2" type="password" />
+    <label>Argon2id parameters (you can leave defaults)</label>
+    <div class="row">
+      <div><label>Time (iterations)</label><input id="p_time" type="text" value="3" /></div>
+      <div><label>Memory (KiB)</label><input id="p_mem" type="text" value="65536" /></div>
+    </div>
+    <div class="row" style="margin-top:6px">
+      <div><label>Parallelism</label><input id="p_par" type="text" value="1" /></div>
+      <div><label>HashLen (bytes)</label><input id="p_hashlen" type="text" value="32" /></div>
+    </div>
+    <div class="actions">
+      <button id="c_cancel">Cancel</button>
+      <button id="c_create" class="primary">Create</button>
+    </div>
+  `);
+  modalEl.querySelector('#c_cancel').onclick = closeModal;
+  modalEl.querySelector('#c_create').onclick = async ()=>{
+    const p1 = modalEl.querySelector('#p1').value;
+    const p2 = modalEl.querySelector('#p2').value;
+    if(p1 !== p2){ alert('Passwords do not match'); return; }
+    if(!p1){ alert('Password required'); return; }
+    const params = {
+      time: parseInt(modalEl.querySelector('#p_time').value||'3',10),
+      mem: parseInt(modalEl.querySelector('#p_mem').value||'65536',10),
+      parallelism: parseInt(modalEl.querySelector('#p_par').value||'1',10),
+      hashLen: parseInt(modalEl.querySelector('#p_hashlen').value||'32',10)
+    };
+    const salt = randBytes(16);
+    try{
+      cryptoKey = await deriveKeyArgon2(p1, salt, params);
+    }catch(err){
+      alert('Argon2 derivation failed: '+err);
+      console.error(err);
+      return;
+    }
+    db = { entries: [] , createdAt: new Date().toISOString() };
+    currentFileMeta = { salt: u8ToB64(salt), params, version:1 };
+    closeModal();
+    setLockedUI(false);
+    alert('Database created. Please Save DB to a file to store it locally.');
+  };
+});
+
+btnAdd.addEventListener('click', ()=> openAddModal());
+
+btnLock.addEventListener('click', ()=>{
+  if(!cryptoKey){
+    return;
+  }
+  if(confirm('Lock and clear decrypted DB from memory?')){
+    cryptoKey = null;
+    db = { entries: [] };
+    currentFileMeta = null;
+    selectedId = null;
+    setLockedUI(true);
+    if(totpInterval){ clearInterval(totpInterval); totpInterval=null; countdownEl.textContent='--'; }
+  }
+});
+
+btnSave.addEventListener('click', async ()=>{
+  if(!cryptoKey || !currentFileMeta){ alert('No unlocked database to save'); return; }
+  const plaintext = strToU8(JSON.stringify(db));
+  const iv = randBytes(12);
+  try{
+    const ct = await aesGcmEncrypt(cryptoKey, plaintext, iv);
+    const payload = {
+      meta: currentFileMeta,
+      iv: u8ToB64(iv),
+      ciphertext: u8ToB64(ct)
+    };
+    const blob = new Blob([JSON.stringify(payload,null,2)], {type:'application/json'});
+    const filename = `authenticator-${(new Date()).toISOString().slice(0,19).replace(/[:T]/g,'-')}.auth.json`;
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(a.href);
+    alert('Database saved to file (download). Keep the file safe; it is encrypted with your password.');
+  } catch(err){
+    console.error(err);
+    alert('Encryption failed: '+err);
+  }
+});
+
+btnLoad.addEventListener('click', ()=> fileInput.click());
+
+fileInput.addEventListener('change', async (e)=>{
+  const f = e.target.files[0];
+  if(!f) return;
+  try{
+    const txt = await f.text();
+    let parsed = JSON.parse(txt);
+    if(!parsed.meta || !parsed.iv || !parsed.ciphertext){ alert('Invalid DB file'); fileInput.value=''; return; }
+    showModal(`
+      <h2>Unlock database</h2>
+      <label>Master password</label>
+      <input id="load_pw" type="password" />
+      <div class="actions">
+        <button id="l_cancel">Cancel</button>
+        <button id="l_open" class="primary">Open</button>
+      </div>
+    `);
+    modalEl.querySelector('#l_cancel').onclick = ()=>{
+      fileInput.value='';
+      closeModal();
+    };
+    modalEl.querySelector('#l_open').onclick = async ()=>{
+      const pw = modalEl.querySelector('#load_pw').value;
+      if(!pw){ alert('Password required'); return; }
+      const salt = b64ToU8(parsed.meta.salt);
+      const params = parsed.meta.params;
+      try{
+        const key = await deriveKeyArgon2(pw, salt, params);
+        const iv = b64ToU8(parsed.iv);
+        const ct = b64ToU8(parsed.ciphertext);
+        const pt = await aesGcmDecrypt(key, ct, iv);
+        const obj = JSON.parse(u8ToStr(pt));
+        db = obj;
+        cryptoKey = key;
+        currentFileMeta = parsed.meta;
+        closeModal();
+        setLockedUI(false);
+        startTotpLoop();
+        alert('Database unlocked.');
+      }catch(err){
+        console.error(err);
+        alert('Failed to unlock — wrong password or corrupted file.');
+      } finally {
+        fileInput.value='';
+      }
+    };
+  }catch(err){
+    console.error(err);
+    alert('Failed to read file: '+err);
+    fileInput.value='';
+  }
+});
+
+/* ---------- TOTP refresh loop ---------- */
+function startTotpLoop(){
+  if(totpInterval){ clearInterval(totpInterval); totpInterval = null; }
+  async function tick(){
+    const period = 30;
+    const now = Date.now();
+    const seconds = Math.floor(now/1000);
+    const step = Math.floor(seconds/period);
+    const next = (step+1)*period;
+    const remaining = next - seconds;
+    countdownEl.textContent = remaining + 's';
+
+    if(db && db.entries){
+      for(let i=0;i<db.entries.length;i++){
+        const e = db.entries[i];
+        try{
+          const code = await totpForSecret(e.secret, e.period || 30, e.digits || 6);
+          const el = document.getElementById('totp-'+i);
+          if(el) el.textContent = code;
+          if(selectedId === i){
+            const p = document.getElementById('previewCode');
+            if(p) p.textContent = code;
+          }
+        }catch(err){
+          const el = document.getElementById('totp-'+i);
+          if(el) el.textContent = 'err';
+        }
+      }
+    }
+  }
+  tick();
+  totpInterval = setInterval(tick, 1000);
+}
+
+/* ---------- Helpers ---------- */
+function escapeHtml(s){
+  return (''+s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+/* On page load: locked state */
+setLockedUI(true);
+
+/* Keyboard shortcuts */
+window.addEventListener('keydown',(e)=>{
+  if(e.ctrlKey && e.key.toLowerCase()==='n'){ e.preventDefault(); btnCreate.click(); }
+  if(e.ctrlKey && e.key.toLowerCase()==='o'){ e.preventDefault(); btnLoad.click(); }
+  if(e.ctrlKey && e.key.toLowerCase()==='s'){ e.preventDefault(); btnSave.click(); }
+});
+
+/* ensure totp loop starts if unlocked */
+setInterval(()=> {
+  if(cryptoKey && !totpInterval) startTotpLoop();
+  if(cryptoKey) statusEl.textContent = `Unlocked — ${db.entries.length} entries`;
+}, 1000);
+</script>
+</body>
+</html>
