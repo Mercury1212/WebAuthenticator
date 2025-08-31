@@ -69,7 +69,7 @@
     animation: ripple 0.6s ease-out;
   }
   @keyframes ripple {
-    0% {
+   0% {
       transform: scale(0, 0);
       opacity: 0.5;
     }
@@ -163,7 +163,7 @@
   .badge{
     background:rgba(255,255,255,0.03);
     padding:6px 10px;
-    border-radius:8px;
+    borderRadius:8px;
     font-weight:600;
     transition: var(--transition);
     box-sizing: border-box;
@@ -199,6 +199,75 @@
     box-sizing: border-box;
     border-top: 1px solid rgba(255,255,255,0.03);
   }
+
+  /* Search bar */
+  .search-container {
+    display: flex;
+    margin-bottom: 16px;
+    gap: 8px;
+  }
+  .search-input {
+    flex: 1;
+    padding: 10px 12px;
+    border-radius: 8px;
+    border: 1px solid rgba(255,255,255,0.08);
+    background: rgba(0,0,0,0.2);
+    color: inherit;
+    transition: var(--transition);
+    font-family: inherit;
+    box-sizing: border-box;
+  }
+  .search-input:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 2px rgba(45, 212, 191, 0.2);
+  }
+  .search-btn {
+    padding: 10px 16px;
+  }
+  
+  /* Password input with peek button */
+  .password-container {
+    position: relative;
+  }
+  .password-input {
+    width: 100%;
+    padding: 10px 40px 10px 12px;
+    border-radius: 8px;
+    border: 1px solid rgba(255,255,255,0.08);
+    background: rgba(0,0,0,0.2);
+    color: inherit;
+    transition: var(--transition);
+    font-family: inherit;
+    box-sizing: border-box;
+  }
+  .password-input:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 2px rgba(45, 212, 191, 0.2);
+  }
+  .peek-btn {
+    position: absolute;
+    right: 8px;
+    top: 50%;
+    transform: translateY(-50%);
+    background: transparent;
+    border: none;
+    color: var(--muted);
+    cursor: pointer;
+    padding: 4px;
+    border-radius: 4px;
+  }
+  .peek-btn:hover {
+    background: rgba(255,255,255,0.05);
+    color: var(--accent);
+  }
+  /* Prevent eye icon from moving like normal buttons */
+.peek-btn:hover,
+.peek-btn:active {
+    transform: translateY(-50%) !important;
+    box-shadow: none !important;
+}
 
   /* modal */
   .modal-backdrop{
@@ -315,6 +384,14 @@
     border-bottom: 1px solid rgba(255,255,255,0.03);
   }
   
+  /* No results message */
+  .no-results {
+    text-align: center;
+    padding: 30px;
+    color: var(--muted);
+    font-style: italic;
+  }
+  
   @media (max-width: 600px) {
     body {
       padding: 12px;
@@ -341,6 +418,9 @@
       display: flex;
       justify-content: space-between;
     }
+    .search-container {
+      flex-direction: column;
+    }
   }
 </style>
 </head>
@@ -365,6 +445,13 @@
       <div>
         <button id="btnAdd" disabled>Add entry</button>
       </div>
+    </div>
+
+    <!-- Search bar -->
+    <div class="search-container">
+      <input type="text" id="searchInput" class="search-input" placeholder="Search entries..." disabled>
+      <button id="searchBtn" class="search-btn" disabled>Search</button>
+      <button id="clearSearchBtn" class="danger" style="display: none;">Clear</button>
     </div>
 
     <div class="list-container" id="entries"></div>
@@ -477,6 +564,8 @@ let cryptoKey = null; // CryptoKey derived from Argon2
 let currentFileMeta = null; // for saving: object with salt, params, etc
 let totpInterval = null;
 let selectedId = null;
+let searchQuery = ''; // Current search query
+let filteredEntries = []; // Filtered entries based on search
 
 /* ---------- DOM ---------- */
 const btnCreate = document.getElementById('btnCreate');
@@ -490,14 +579,77 @@ const countdownEl = document.getElementById('countdown');
 const fileInput = document.getElementById('fileInput');
 const modalBackdrop = document.getElementById('modalBackdrop');
 const modalEl = document.getElementById('modal');
+const searchInput = document.getElementById('searchInput');
+const searchBtn = document.getElementById('searchBtn');
+const clearSearchBtn = document.getElementById('clearSearchBtn');
 
 /* ---------- UI helpers ---------- */
 function showModal(html){
   modalEl.innerHTML = html;
   modalBackdrop.style.display = 'flex';
+  
+  // Add peek functionality to password fields
+  setTimeout(() => {
+    const passwordInputs = modalEl.querySelectorAll('input[type="password"]');
+    passwordInputs.forEach(input => {
+      // Create container
+      const container = document.createElement('div');
+      container.className = 'password-container';
+      
+      // Wrap the input
+      input.parentNode.insertBefore(container, input);
+      container.appendChild(input);
+      
+      // Add peek button
+      const peekBtn = document.createElement('button');
+      peekBtn.className = 'peek-btn';
+      peekBtn.innerHTML = '👁';
+      peekBtn.type = 'button';
+      peekBtn.title = 'Show password';
+      
+      peekBtn.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        input.type = 'text';
+        peekBtn.innerHTML = '👁‍🗨';
+        peekBtn.title = 'Hide password';
+      });
+      
+      peekBtn.addEventListener('mouseup', (e) => {
+        e.preventDefault();
+        input.type = 'password';
+        peekBtn.innerHTML = '👁';
+        peekBtn.title = 'Show password';
+      });
+      
+      peekBtn.addEventListener('mouseleave', (e) => {
+        input.type = 'password';
+        peekBtn.innerHTML = '👁';
+        peekBtn.title = 'Show password';
+      });
+      
+      // For touch devices
+      peekBtn.addEventListener('touchstart', (e) => {
+        e.preventDefault();
+        input.type = 'text';
+        peekBtn.innerHTML = '👁‍🗨';
+        peekBtn.title = 'Hide password';
+      });
+      
+      peekBtn.addEventListener('touchend', (e) => {
+        e.preventDefault();
+        input.type = 'password';
+        peekBtn.innerHTML = '👁';
+        peekBtn.title = 'Show password';
+      });
+      
+      container.appendChild(peekBtn);
+    });
+  }, 10);
+  
   const fi = modalEl.querySelector('input,textarea,select,button');
   if(fi) fi.focus();
 }
+
 function closeModal(){ modalBackdrop.style.display = 'none'; modalEl.innerHTML = ''; }
 
 modalBackdrop.addEventListener('click', (e)=>{
@@ -515,25 +667,60 @@ function setLockedUI(locked){
   btnSave.disabled = locked;
   btnAdd.disabled = locked;
   btnLock.disabled = locked;
+  searchInput.disabled = locked;
+  searchBtn.disabled = locked;
+  
   if(locked){
     statusEl.textContent = 'Locked — no database open';
     statusEl.className = 'badge';
+    clearSearch();
   } else {
     statusEl.textContent = `Unlocked — ${db.entries.length} entries`;
     statusEl.className = 'badge success';
+    searchInput.disabled = false;
+    searchBtn.disabled = false;
   }
   renderEntries();
 }
 
+function filterEntries(query) {
+  if (!query.trim()) {
+    filteredEntries = [...db.entries];
+    return;
+  }
+  
+  const lowerQuery = query.toLowerCase();
+  filteredEntries = db.entries.filter(entry => 
+    entry.label.toLowerCase().includes(lowerQuery) || 
+    (entry.issuer && entry.issuer.toLowerCase().includes(lowerQuery)) ||
+    entry.secret.toLowerCase().includes(lowerQuery)
+  );
+}
+
 function renderEntries(){
   entriesEl.innerHTML = '';
+  
+  // Use filtered entries if search is active, otherwise use all entries
+  const entriesToRender = searchQuery ? filteredEntries : db.entries;
+  
   if(!db || !db.entries || db.entries.length === 0){
     entriesEl.innerHTML = '<div class="muted tiny" style="text-align: center; padding: 40px;">No entries yet. Click "Add entry" to get started.</div>';
     return;
   }
-  db.entries.forEach((e, idx)=>{
+  
+  if(entriesToRender.length === 0){
+    entriesEl.innerHTML = '<div class="no-results">No entries found matching your search.</div>';
+    return;
+  }
+  
+  entriesToRender.forEach((e, idx)=>{
+    // Find the original index in the db.entries array
+    const originalIndex = db.entries.findIndex(entry => 
+      entry.label === e.label && entry.secret === e.secret
+    );
+    
     const div = document.createElement('div');
-    div.className = 'entry' + (selectedId === idx ? ' selected' : '');
+    div.className = 'entry' + (selectedId === originalIndex ? ' selected' : '');
     
     const meta = document.createElement('div');
     meta.className = 'meta';
@@ -550,7 +737,7 @@ function renderEntries(){
     const totpSpan = document.createElement('div');
     totpSpan.className='totp';
     totpSpan.textContent = '------';
-    totpSpan.id = 'totp-'+idx;
+    totpSpan.id = 'totp-'+originalIndex;
     
     const ctr = document.createElement('div');
     ctr.className = 'entry-actions';
@@ -585,8 +772,13 @@ function renderEntries(){
       }
     };
     
-    btnEdit.onclick = ()=>{ openEditModal(idx); };
-    btnDel.onclick = ()=>{ if(confirm('Delete this entry?')){ db.entries.splice(idx,1); renderEntries(); setLockedUI(false); } };
+    btnEdit.onclick = ()=>{ openEditModal(originalIndex); };
+    btnDel.onclick = ()=>{ if(confirm('Delete this entry?')){ 
+      db.entries.splice(originalIndex, 1); 
+      filterEntries(searchQuery);
+      renderEntries(); 
+      setLockedUI(false); 
+    }};
     
     ctr.appendChild(btnCopy);
     ctr.appendChild(btnEdit);
@@ -600,6 +792,27 @@ function renderEntries(){
     
     entriesEl.appendChild(div);
   });
+}
+
+function clearSearch() {
+  searchQuery = '';
+  searchInput.value = '';
+  filteredEntries = [...db.entries];
+  clearSearchBtn.style.display = 'none';
+  renderEntries();
+}
+
+function performSearch() {
+  searchQuery = searchInput.value;
+  filterEntries(searchQuery);
+  renderEntries();
+  
+  // Show clear button if there's a search query
+  if (searchQuery) {
+    clearSearchBtn.style.display = 'block';
+  } else {
+    clearSearchBtn.style.display = 'none';
+  }
 }
 
 /* ---------- Add / Edit ---------- */
@@ -638,6 +851,11 @@ function openAddModal(){
     db.entries.push({label, issuer, secret, digits, period});
     closeModal();
     setLockedUI(false);
+    // After adding, update search if active
+    if (searchQuery) {
+      filterEntries(searchQuery);
+      renderEntries();
+    }
   };
 }
 
@@ -677,6 +895,11 @@ function openEditModal(idx){
     db.entries[idx] = {label, issuer, secret, digits, period};
     closeModal();
     setLockedUI(false);
+    // After editing, update search if active
+    if (searchQuery) {
+      filterEntries(searchQuery);
+      renderEntries();
+    }
   };
 }
 
@@ -686,9 +909,13 @@ btnCreate.addEventListener('click', async ()=>{
   showModal(`
     <h2>Create new database</h2>
     <label>Master password</label>
-    <input id="p1" type="password" />
+    <div class="password-container">
+      <input id="p1" type="password" placeholder="Enter password" />
+    </div>
     <label>Confirm password</label>
-    <input id="p2" type="password" />
+    <div class="password-container">
+      <input id="p2" type="password" placeholder="Confirm password" />
+    </div>
     <label>Argon2id parameters (you can leave defaults)</label>
     <div class="row">
       <div><label>Time (iterations)</label><input id="p_time" type="text" value="3" /></div>
@@ -812,7 +1039,9 @@ fileInput.addEventListener('change', async (e)=>{
       showModal(`
         <h2>Unlock database</h2>
         <label>Master password</label>
-        <input id="load_pw" type="password" />
+        <div class="password-container">
+          <input id="load_pw" type="password" placeholder="Enter master password" />
+        </div>
         <div class="actions">
           <button id="l_cancel">Cancel</button>
           <button id="l_open" class="primary">Open</button>
@@ -863,7 +1092,9 @@ fileInput.addEventListener('change', async (e)=>{
         showModal(`
           <h2>Unlock database</h2>
           <label>Master password</label>
-          <input id="load_pw" type="password" />
+          <div class="password-container">
+            <input id="load_pw" type="password" placeholder="Enter master password" />
+          </div>
           <div class="actions">
             <button id="l_cancel">Cancel</button>
             <button id="l_open" class="primary">Open</button>
@@ -963,6 +1194,25 @@ document.addEventListener('mousedown', function(e) {
     ripple.remove();
   }, 600);
 });
+
+// Search functionality
+searchBtn.addEventListener('click', performSearch);
+clearSearchBtn.addEventListener('click', clearSearch);
+
+// Allow pressing Enter to search
+searchInput.addEventListener('keypress', (e) => {
+  if (e.key === 'Enter') {
+    performSearch();
+  }
+});
+
+// Enable search when database is unlocked
+setInterval(() => {
+  if (cryptoKey) {
+    searchInput.disabled = false;
+    searchBtn.disabled = false;
+  }
+}, 1000);
 
 </script>
 </body>
