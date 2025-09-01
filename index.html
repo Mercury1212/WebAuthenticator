@@ -8,6 +8,9 @@
 <!-- Use a bundled Argon2 so wasm loads reliably -->
 <script src="https://cdn.jsdelivr.net/npm/argon2-browser/dist/argon2-bundled.min.js"></script>
 
+<!-- QR Code library -->
+<script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.1/build/qrcode.min.js"></script>
+
 <style>
   :root{
     --bg:#0f1724; --card:#0b1220; --muted:#9aa4b2; --accent:#2dd4bf;
@@ -568,6 +571,61 @@ async function totpForSecret(base32Secret, period=30, digits=6){
   return hotp(secretBytes, BigInt(t), digits);
 }
 
+/* ---------- QR Code Generation ---------- */
+function generateQRCode(url, width = 200, height = 200) {
+  return new Promise((resolve, reject) => {
+    const canvas = document.createElement('canvas');
+    QRCode.toCanvas(canvas, url, { 
+      width: width,
+      height: height,
+      margin: 1,
+      color: {
+        dark: '#000000',
+        light: '#ffffff'
+      }
+    }, function(error) {
+      if (error) {
+        reject(error);
+      } else {
+        resolve(canvas.toDataURL('image/png'));
+      }
+    });
+  });
+}
+
+function showQRCode(entry) {
+  const otpauthUrl = `otpauth://totp/${encodeURIComponent(entry.issuer || entry.label)}:${encodeURIComponent(entry.label)}?secret=${entry.secret}&issuer=${encodeURIComponent(entry.issuer || entry.label)}&digits=${entry.digits}&period=${entry.period}`;
+  
+  showModal(`
+    <h2>QR Code for ${escapeHtml(entry.issuer || entry.label)}</h2>
+    <div class="center" style="margin: 20px 0;">
+      <div id="qrCodeContainer" style="width: 200px; height: 200px; display: flex; align-items: center; justify-content: center;">
+        <div class="small muted">Generating QR code...</div>
+      </div>
+    </div>
+    <div style="background: rgba(0,0,0,0.2); padding: 12px; border-radius: 8px; margin: 10px 0;">
+      <div class="small muted">Secret: ${entry.secret}</div>
+      <div class="small muted">OTPAuth URL:</div>
+      <div class="small" style="word-break: break-all; margin-top: 5px;">${otpauthUrl}</div>
+    </div>
+    <div class="actions">
+      <button id="qrClose">Close</button>
+    </div>
+  `);
+  
+  // Generate the QR code after the modal is shown
+  setTimeout(() => {
+    generateQRCode(otpauthUrl).then(dataUrl => {
+      document.getElementById('qrCodeContainer').innerHTML = `<img src="${dataUrl}" alt="QR Code" style="max-width: 100%; height: auto;" />`;
+    }).catch(err => {
+      console.error('QR code generation failed:', err);
+      document.getElementById('qrCodeContainer').innerHTML = `<div class="small danger">Failed to generate QR code</div>`;
+    });
+  }, 100);
+  
+  modalEl.querySelector('#qrClose').onclick = closeModal;
+}
+
 /* ---------- Argon2id + AES helpers ---------- */
 async function deriveKeyArgon2(password, saltBytes, params){
   // argon2-browser hash expects strings for pass and salt; convert salt bytes to string
@@ -789,6 +847,10 @@ function renderEntries(){
     btnCopy.textContent='Copy'; 
     btnCopy.title='Copy code to clipboard';
     
+    const btnQR = document.createElement('button');
+    btnQR.textContent = 'QR';
+    btnQR.title = 'Show QR Code';
+    
     const btnEdit = document.createElement('button'); 
     btnEdit.textContent='Edit';
     
@@ -813,6 +875,9 @@ function renderEntries(){
       }
     };
     
+    // QR code functionality
+    btnQR.onclick = () => { showQRCode(e); };
+    
     btnEdit.onclick = ()=>{ openEditModal(originalIndex); };
     btnDel.onclick = ()=>{ if(confirm('Delete this entry?')){ 
       db.entries.splice(originalIndex, 1); 
@@ -822,6 +887,7 @@ function renderEntries(){
     }};
     
     ctr.appendChild(btnCopy);
+    ctr.appendChild(btnQR);
     ctr.appendChild(btnEdit);
     ctr.appendChild(btnDel);
     
