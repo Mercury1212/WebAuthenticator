@@ -392,6 +392,41 @@
     font-style: italic;
   }
   
+  /* Collapsing bar countdown */
+  .countdown-container {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 8px;
+  }
+  
+  .countdown-bar {
+    flex: 1;
+    height: 6px;
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 3px;
+    overflow: hidden;
+    position: relative;
+  }
+  
+  .countdown-fill {
+    position: absolute;
+    top: 0;
+    left: 0;
+    height: 100%;
+    width: 100%;
+    background: var(--accent);
+    border-radius: 3px;
+    transition: width 1s linear;
+  }
+  
+  .countdown-text {
+    font-size: 12px;
+    color: var(--muted);
+    min-width: 40px;
+    text-align: right;
+  }
+  
   @media (max-width: 600px) {
     body {
       padding: 12px;
@@ -458,7 +493,12 @@
     
     <footer>
       <div>Storage: local file only. Argon2id parameters are stored inside the encrypted file for correct re-derivation.</div>
-      <div class="small" style="margin-top: 8px;">Next code refresh in: <span id="countdown">--</span>s</div>
+      <div class="countdown-container">
+        <div class="countdown-bar">
+          <div class="countdown-fill" id="countdownBar"></div>
+        </div>
+        <div class="countdown-text">Refresh in: <span id="countdown">--</span>s</div>
+      </div>
     </footer>
   </div>
 </div>
@@ -576,6 +616,7 @@ const btnAdd = document.getElementById('btnAdd');
 const entriesEl = document.getElementById('entries');
 const statusEl = document.getElementById('status');
 const countdownEl = document.getElementById('countdown');
+const countdownBar = document.getElementById('countdownBar');
 const fileInput = document.getElementById('fileInput');
 const modalBackdrop = document.getElementById('modalBackdrop');
 const modalEl = document.getElementById('modal');
@@ -1156,7 +1197,22 @@ function updateTotps(){
   const now = nowUnix();
   const period = 30;
   const remaining = period - (now % period);
+  
+  // Update countdown text
   countdownEl.textContent = remaining;
+  
+  // Update collapsing bar
+  const percentage = (remaining / period) * 100;
+  countdownBar.style.width = percentage + '%';
+  
+  // Change color based on remaining time
+  if (remaining <= 10) {
+    countdownBar.style.background = '#fbbf24'; // warning color
+  } else if (remaining <= 5) {
+    countdownBar.style.background = '#ff6b6b'; // danger color
+  } else {
+    countdownBar.style.background = 'var(--accent)'; // normal color
+  }
   
   db.entries.forEach((e, idx)=>{
     const el = document.getElementById('totp-'+idx);
