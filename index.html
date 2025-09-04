@@ -166,7 +166,7 @@
   .badge{
     background:rgba(255,255,255,0.03);
     padding:6px 10px;
-    borderRadius:8px;
+    border-radius:8px;
     font-weight:600;
     transition: var(--transition);
     box-sizing: border-box;
@@ -430,6 +430,19 @@
     text-align: right;
   }
   
+  /* CSV Import/Export styles */
+  .csv-section {
+    margin-top: 20px;
+    padding-top: 20px;
+    border-top: 1px solid rgba(255,255,255,0.03);
+  }
+  
+  .csv-buttons {
+    display: flex;
+    gap: 10px;
+    margin-top: 10px;
+  }
+  
   @media (max-width: 600px) {
     body {
       padding: 12px;
@@ -457,6 +470,9 @@
       justify-content: space-between;
     }
     .search-container {
+      flex-direction: column;
+    }
+    .csv-buttons {
       flex-direction: column;
     }
   }
@@ -494,6 +510,15 @@
 
     <div class="list-container" id="entries"></div>
     
+    <!-- CSV Import/Export Section -->
+    <div class="csv-section">
+      <div class="small">CSV Import/Export</div>
+      <div class="csv-buttons">
+        <button id="btnExportCSV" disabled>Export to CSV</button>
+        <button id="btnImportCSV" disabled>Import from CSV</button>
+      </div>
+    </div>
+    
     <footer>
       <div>Storage: local file only. Argon2id parameters are stored inside the encrypted file for correct re-derivation.</div>
       <div class="countdown-container">
@@ -514,6 +539,7 @@
 </div>
 
 <input type="file" id="fileInput" accept=".auth" style="display:none" />
+<input type="file" id="csvFileInput" accept=".csv" style="display:none" />
 
 <script>
 /*
@@ -522,6 +548,7 @@
   - AES-GCM encryption for DB
   - TOTP using WebCrypto HMAC-SHA1
   - Save/Load via file download/upload
+  - CSV Import/Export functionality
 */
 
 /* ---------- Utilities ---------- */
@@ -672,11 +699,14 @@ const btnLoad = document.getElementById('btnLoad');
 const btnSave = document.getElementById('btnSave');
 const btnLock = document.getElementById('btnLock');
 const btnAdd = document.getElementById('btnAdd');
+const btnExportCSV = document.getElementById('btnExportCSV');
+const btnImportCSV = document.getElementById('btnImportCSV');
 const entriesEl = document.getElementById('entries');
 const statusEl = document.getElementById('status');
 const countdownEl = document.getElementById('countdown');
 const countdownBar = document.getElementById('countdownBar');
 const fileInput = document.getElementById('fileInput');
+const csvFileInput = document.getElementById('csvFileInput');
 const modalBackdrop = document.getElementById('modalBackdrop');
 const modalEl = document.getElementById('modal');
 const searchInput = document.getElementById('searchInput');
@@ -767,6 +797,8 @@ function setLockedUI(locked){
   btnSave.disabled = locked;
   btnAdd.disabled = locked;
   btnLock.disabled = locked;
+  btnExportCSV.disabled = locked;
+  btnImportCSV.disabled = locked;
   searchInput.disabled = locked;
   searchBtn.disabled = locked;
   
@@ -779,6 +811,8 @@ function setLockedUI(locked){
     statusEl.className = 'badge success';
     searchInput.disabled = false;
     searchBtn.disabled = false;
+    btnExportCSV.disabled = false;
+    btnImportCSV.disabled = false;
   }
   renderEntries();
 }
@@ -921,6 +955,177 @@ function performSearch() {
   } else {
     clearSearchBtn.style.display = 'none';
   }
+}
+
+/* ---------- CSV Import/Export Functions ---------- */
+function exportToCSV() {
+  if (!db.entries || db.entries.length === 0) {
+    alert('No entries to export');
+    return;
+  }
+  
+  // Create CSV content
+  let csvContent = 'issuer,label,secret,digits,period\n';
+  
+  db.entries.forEach(entry => {
+    const issuer = escapeCSVField(entry.issuer || '');
+    const label = escapeCSVField(entry.label);
+    const secret = escapeCSVField(entry.secret);
+    const digits = entry.digits || 6;
+    const period = entry.period || 30;
+    
+    csvContent += `${issuer},${label},${secret},${digits},${period}\n`;
+  });
+  
+  // Create download link
+  const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  const date = new Date().toISOString().slice(0, 10);
+  
+  link.setAttribute('href', url);
+  link.setAttribute('download', `authenticator-backup-${date}.csv`);
+  link.style.visibility = 'hidden';
+  
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  
+  // Add visual feedback for successful export
+  const btn = document.getElementById('btnExportCSV');
+  const originalText = btn.textContent;
+  btn.textContent = '✓ Exported!';
+  btn.classList.add('success');
+  setTimeout(() => {
+    btn.textContent = originalText;
+    btn.classList.remove('success');
+  }, 2000);
+}
+
+function escapeCSVField(field) {
+  if (field.includes(',') || field.includes('"') || field.includes('\n')) {
+    return `"${field.replace(/"/g, '""')}"`;
+  }
+  return field;
+}
+
+function importFromCSV() {
+  csvFileInput.click();
+}
+
+function handleCSVImport(file) {
+  const reader = new FileReader();
+  
+  reader.onload = function(e) {
+    try {
+      const csvContent = e.target.result;
+      const lines = csvContent.split('\n');
+      const newEntries = [];
+      
+      // Skip header row and process each line
+      for (let i = 1; i < lines.length; i++) {
+        const line = lines[i].trim();
+        if (!line) continue;
+        
+        const values = parseCSVLine(line);
+        if (values.length < 3) continue; // Need at least issuer, label, secret
+        
+        const issuer = values[0] || '';
+        const label = values[1] || '';
+        const secret = values[2].replace(/\s+/g, '').toUpperCase();
+        const digits = parseInt(values[3] || '6', 10);
+        const period = parseInt(values[4] || '30', 10);
+        
+        if (label && secret) {
+          newEntries.push({
+            issuer,
+            label,
+            secret,
+            digits: isNaN(digits) ? 6 : digits,
+            period: isNaN(period) ? 30 : period
+          });
+        }
+      }
+      
+      if (newEntries.length === 0) {
+        alert('No valid entries found in the CSV file');
+        return;
+      }
+      
+      // Show import confirmation modal
+      showModal(`
+        <h2>Import CSV Entries</h2>
+        <p>Found ${newEntries.length} valid entries in the CSV file.</p>
+        <div style="max-height: 200px; overflow-y: auto; margin: 10px 0; padding: 10px; background: rgba(0,0,0,0.2); border-radius: 8px;">
+          ${newEntries.map(e => `<div class="small">${escapeHtml(e.issuer || e.label)}: ${escapeHtml(e.label)}</div>`).join('')}
+        </div>
+        <label>
+          <input type="checkbox" id="importOverwrite" />
+          Overwrite existing entries with same label
+        </label>
+        <div class="actions">
+          <button id="importCancel">Cancel</button>
+          <button id="importConfirm" class="primary">Import ${newEntries.length} Entries</button>
+        </div>
+      `);
+      
+      modalEl.querySelector('#importCancel').onclick = closeModal;
+      modalEl.querySelector('#importConfirm').onclick = () => {
+        const overwrite = modalEl.querySelector('#importOverwrite').checked;
+        processCSVImport(newEntries, overwrite);
+        closeModal();
+      };
+      
+    } catch (error) {
+      console.error('CSV import error:', error);
+      alert('Failed to parse CSV file: ' + error.message);
+    }
+  };
+  
+  reader.onerror = function() {
+    alert('Failed to read the CSV file');
+  };
+  
+  reader.readAsText(file);
+}
+
+function parseCSVLine(line) {
+  const values = [];
+  let current = '';
+  let inQuotes = false;
+  
+  for (let i = 0; i < line.length; i++) {
+    const char = line[i];
+    
+    if (char === '"' && (i === 0 || line[i-1] !== '\\')) {
+      inQuotes = !inQuotes;
+    } else if (char === ',' && !inQuotes) {
+      values.push(current);
+      current = '';
+    } else {
+      current += char;
+    }
+  }
+  
+  values.push(current);
+  return values.map(v => v.replace(/^"|"$/g, '').replace(/""/g, '"').trim());
+}
+
+function processCSVImport(newEntries, overwrite) {
+  if (overwrite) {
+    // Remove existing entries with same labels
+    const labelsToImport = new Set(newEntries.map(e => e.label.toLowerCase()));
+    db.entries = db.entries.filter(e => !labelsToImport.has(e.label.toLowerCase()));
+  }
+  
+  // Add new entries
+  db.entries.push(...newEntries);
+  
+  // Update UI
+  setLockedUI(false);
+  renderEntries();
+  
+  alert(`Successfully imported ${newEntries.length} entries`);
 }
 
 /* ---------- Add / Edit ---------- */
@@ -1250,6 +1455,18 @@ fileInput.addEventListener('change', async (e)=>{
     alert('Failed to load file: '+err);
     fileInput.value='';
   }
+});
+
+/* ---------- CSV Import/Export Event Listeners ---------- */
+btnExportCSV.addEventListener('click', exportToCSV);
+btnImportCSV.addEventListener('click', importFromCSV);
+
+csvFileInput.addEventListener('change', (e) => {
+  const file = e.target.files[0];
+  if (file) {
+    handleCSVImport(file);
+  }
+  csvFileInput.value = '';
 });
 
 /* ---------- TOTP loop ---------- */
